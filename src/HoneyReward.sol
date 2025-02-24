@@ -19,17 +19,17 @@ contract HoneyReward {
     IERC20 public immutable honeyToken;
 
     // Reward distribution parameters
-    uint256 public immutable rewardRate;       // Reward rate in wei per second
-    uint256 public immutable periodStart;      // Start time of reward distribution
-    uint256 public immutable periodEnd;        // End time of reward distribution (3 years later)
+    uint256 public immutable rewardRate; // Reward rate in wei per second
+    uint256 public immutable periodStart; // Start time of reward distribution
+    uint256 public immutable periodEnd; // End time of reward distribution (3 years later)
 
     // State variables for reward tracking
-    uint256 public lastUpdateTime;             // Last time the reward state was updated
-    uint256 public rewardPerTokenStored;       // Accumulated reward per Honeybee token, scaled by 1e18
+    uint256 public lastUpdateTime; // Last time the reward state was updated
+    uint256 public rewardPerTokenStored; // Accumulated reward per Honeybee token, scaled by 1e18
 
     // User reward tracking
-    mapping(address => uint256) public userRewardPerTokenPaid;  // Reward per token paid to each user
-    mapping(address => uint256) public rewards;                 // Claimable rewards for each user
+    mapping(address => uint256) public userRewardPerTokenPaid; // Reward per token paid to each user
+    mapping(address => uint256) public rewards; // Claimable rewards for each user
 
     /**
      * @dev Constructor to initialize the contract.
@@ -71,10 +71,8 @@ contract HoneyReward {
         if (honeybeeToken.totalSupply() == 0) {
             return rewardPerTokenStored;
         }
-        return
-            rewardPerTokenStored +
-            (((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * 1e18) /
-                honeybeeToken.totalSupply());
+        return rewardPerTokenStored
+            + (((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * 1e18) / honeybeeToken.totalSupply());
     }
 
     /**
@@ -83,10 +81,8 @@ contract HoneyReward {
      * @return Claimable reward in wei
      */
     function earned(address account) public view returns (uint256) {
-        return
-            ((honeybeeToken.balanceOf(account) *
-                (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) +
-            rewards[account];
+        return ((honeybeeToken.balanceOf(account) * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18)
+            + rewards[account];
     }
 
     /**
