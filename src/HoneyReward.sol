@@ -1,44 +1,33 @@
-// SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.4;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
-// Import OpenZeppelin contracts for ERC20 and safe transfers
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/**
- * @title HoneyReward
- * @dev Distributes Honey tokens to Honeybee token holders proportionally over 3 years.
- * Rewards are based on the user's share of the total Honeybee supply.
- * Users can claim their accrued rewards at any time.
- */
 contract HoneyReward {
     using SafeERC20 for IERC20;
 
-    // Immutable token contracts
     IERC20 public immutable honeybeeToken;
     IERC20 public immutable honeyToken;
 
-    // Reward distribution parameters
-    uint256 public immutable rewardRate; // Reward rate in wei per second
-    uint256 public immutable periodStart; // Start time of reward distribution
-    uint256 public immutable periodEnd; // End time of reward distribution (3 years later)
+    uint256 public immutable rewardRate;
+    uint256 public immutable periodStart;
+    uint256 public immutable periodEnd;
+    uint256 public constant TOTAL_REWARDS = 20_000_000_000 * 10**18;
+    uint256 public constant DAILY_CAP_PERCENTAGE = 100;
+    uint256 public constant BASIS_POINTS = 10_000;
+    uint256 public constant SECONDS_PER_DAY = 86_400;
 
-    // State variables for reward tracking
-    uint256 public lastUpdateTime; // Last time the reward state was updated
-    uint256 public rewardPerTokenStored; // Accumulated reward per Honeybee token, scaled by 1e18
+    uint256 public lastUpdateTime;
+    uint256 public rewardPerTokenStored;
+    bool public rewardsFinalized;
 
-    // User reward tracking
-    mapping(address => uint256) public userRewardPerTokenPaid; // Reward per token paid to each user
-    mapping(address => uint256) public rewards; // Claimable rewards for each user
+    mapping(address => uint256) public userRewardPerTokenPaid;
+    mapping(address => uint256) public rewards;
+    mapping(address => uint256) public lastClaimTimestamp;
 
-    /**
-     * @dev Constructor to initialize the contract.
-     * @param _honeybeeToken Address of the Honeybee token contract
-     * @param _honeyToken Address of the Honey token contract
-     * @param _rewardRate Reward rate in wei per second (e.g., 211404000000000000)
-     * @param _periodStart Start time of reward distribution
-     * @param _periodEnd End time of reward distribution
-     */
+    event RewardsClaimed(address indexed user, uint256 amount);
+
     constructor(
         address _honeybeeToken,
         address _honeyToken,
@@ -55,66 +44,79 @@ contract HoneyReward {
         lastUpdateTime = _periodStart;
     }
 
-    /**
-     * @dev Returns the last time rewards are applicable (current time or period end).
-     * @return Last applicable timestamp for reward calculation
-     */
     function lastTimeRewardApplicable() public view returns (uint256) {
         return block.timestamp < periodEnd ? block.timestamp : periodEnd;
     }
 
-    /**
-     * @dev Calculates the accumulated reward per Honeybee token up to now.
-     * @return Accumulated reward per token, scaled by 1e18
-     */
     function rewardPerToken() public view returns (uint256) {
-        if (honeybeeToken.totalSupply() == 0) {
+        if (honeybeeToken.totalSupply() == 0 || block.timestamp <= periodStart) {
             return rewardPerTokenStored;
         }
-        return rewardPerTokenStored
-            + (((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * 1e18) / honeybeeToken.totalSupply());
+        if (rewardsFinalized || block.timestamp >= periodEnd) {
+            // Return the finalized reward per token at periodEnd
+            return ((periodEnd - periodStart) * rewardRate * 1e18) / honeybeeToken.totalSupply();
+        }
+        uint256 timeApplicable = lastTimeRewardApplicable();
+        if (timeApplicable <= lastUpdateTime) {
+            return rewardPerTokenStored;
+        }
+        return
+            rewardPerTokenStored +
+            (((timeApplicable - lastUpdateTime) * rewardRate * 1e18) /
+                honeybeeToken.totalSupply());
     }
 
-    /**
-     * @dev Calculates the claimable reward for an account.
-     * @param account Address of the user
-     * @return Claimable reward in wei
-     */
     function earned(address account) public view returns (uint256) {
-        return ((honeybeeToken.balanceOf(account) * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18)
-            + rewards[account];
+        return
+            ((honeybeeToken.balanceOf(account) *
+                (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) +
+            rewards[account];
     }
 
-    /**
-     * @dev Updates the reward state for an account.
-     * @param account Address of the user
-     */
-    function updateReward(address account) internal {
-        rewardPerTokenStored = rewardPerToken();
-        lastUpdateTime = lastTimeRewardApplicable();
+    function updateReward(address account) public {
+        if (block.timestamp >= periodEnd && !rewardsFinalized) {
+            // Finalize rewards at periodEnd
+            rewardPerTokenStored = ((periodEnd - periodStart) * rewardRate * 1e18) / honeybeeToken.totalSupply();
+            lastUpdateTime = periodEnd;
+            rewardsFinalized = true;
+        } else if (!rewardsFinalized) {
+            rewardPerTokenStored = rewardPerToken();
+            lastUpdateTime = lastTimeRewardApplicable();
+        }
         if (account != address(0)) {
             rewards[account] = earned(account);
             userRewardPerTokenPaid[account] = rewardPerTokenStored;
         }
     }
 
-    /**
-     * @dev Allows a user to claim their accrued rewards.
-     */
+    function getDailyRewardCap(address account) public view returns (uint256) {
+        uint256 honeybeeBalance = honeybeeToken.balanceOf(account);
+        return (honeybeeBalance * DAILY_CAP_PERCENTAGE) / BASIS_POINTS;
+    }
+
     function claimReward() public {
         updateReward(msg.sender);
         uint256 reward = rewards[msg.sender];
-        if (reward > 0) {
-            rewards[msg.sender] = 0;
-            honeyToken.safeTransfer(msg.sender, reward);
-        }
-    }
+        require(honeybeeToken.balanceOf(msg.sender) > 0, "Must hold Honeybee tokens to claim");
 
-    /**
-     * @dev Allows a user to update their reward state without claiming.
-     * Should be called before transferring Honeybee tokens to update accrued rewards.
-     */
-    function updateMyReward() public {
-        updateReward(msg.sender);
+        if (reward > 0) {
+            uint256 dailyCap = getDailyRewardCap(msg.sender);
+            uint256 timeSinceLastClaim = block.timestamp - lastClaimTimestamp[msg.sender];
+            uint256 claimable;
+
+            if (timeSinceLastClaim >= SECONDS_PER_DAY) {
+                claimable = reward > dailyCap ? dailyCap : reward;
+            } else {
+                uint256 availableCap = (dailyCap * timeSinceLastClaim) / SECONDS_PER_DAY;
+                claimable = reward > availableCap ? availableCap : reward;
+            }
+
+            if (claimable > 0) {
+                rewards[msg.sender] = reward - claimable;
+                lastClaimTimestamp[msg.sender] = block.timestamp;
+                honeyToken.safeTransfer(msg.sender, claimable);
+                emit RewardsClaimed(msg.sender, claimable);
+            }
+        }
     }
 }
